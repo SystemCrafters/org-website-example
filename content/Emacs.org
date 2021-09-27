@@ -1,0 +1,1338 @@
+#+TITLE: Emacs Configuration
+#+PROPERTY: header-args:emacs-lisp :tangle .emacs.d/init.el
+
+This is an ongoing evolution of my original Emacs configuration files, inspired by a bunch of resources I've found online.
+
+* Startup Performance
+
+Make startup faster by reducing the frequency of garbage collection and then use a hook to measure Emacs startup time.
+
+Also, turn on =lexical-binding= for the init file!
+
+#+begin_src emacs-lisp
+
+  ;; -*- lexical-binding: t; -*-
+
+  ;; The default is 800 kilobytes.  Measured in bytes.
+  (setq gc-cons-threshold (* 50 1000 1000))
+
+  ;; Profile emacs startup
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (message "*** Emacs loaded in %s with %d garbage collections."
+                       (format "%.2f seconds"
+                               (float-time
+                                (time-subtract after-init-time before-init-time)))
+                       gcs-done)))
+
+#+end_src
+
+* Native Compilation
+
+I've started experimenting with the =native-comp= branch of Emacs for increased performance.  Here are some settings to tweak the behavior slightly:
+
+#+begin_src emacs-lisp
+
+  ;; Silence compiler warnings as they can be pretty disruptive
+  (setq native-comp-async-report-warnings-errors nil)
+
+  ;; Set the right directory to store the native comp cache
+  (add-to-list 'native-comp-eln-load-path (expand-file-name "eln-cache/" user-emacs-directory))
+
+#+end_src
+
+* System Settings
+
+Some parts of the configuration require knowledge of whether Emacs is running on a Guix system or in Termux on Android.  Also load system-specific settings from =per-system-settings.el=.
+
+#+begin_src emacs-lisp
+
+  (load-file "~/.dotfiles/.emacs.d/lisp/dw-settings.el")
+
+  ;; Load settings for the first time
+  (dw/load-system-settings)
+
+  (require 'subr-x)
+  (setq dw/is-termux
+        (string-suffix-p "Android" (string-trim (shell-command-to-string "uname -a"))))
+
+  (setq dw/is-guix-system (and (eq system-type 'gnu/linux)
+                               (require 'f)
+                               (string-equal (f-read "/etc/issue")
+                                             "\nThis is the GNU system.  Welcome.\n")))
+
+#+end_src
+
+* Package Management
+
+Set up ELPA, MELPA, and Org package repositories and load =use-package= to manage package configuration.
+
+*NOTE:* I'm keeping this section in but disabling tangling for now because I'm trying out =straight.el= as an alternative.
+
+#+begin_src emacs-lisp :tangle no
+
+  ;; Initialize package sources
+  (require 'package)
+
+  (setq package-archives '(("melpa" . "https://melpa.org/packages/")
+                           ("melpa-stable" . "https://stable.melpa.org/packages/")
+                           ("org" . "https://orgmode.org/elpa/")
+                           ("elpa" . "https://elpa.gnu.org/packages/")))
+
+  ;; Fix an issue accessing the ELPA archive in Termux
+  (when dw/is-termux
+    (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3"))
+
+  (package-initialize)
+  ;; (unless package-archive-contents
+  ;;   (package-refresh-contents))
+
+  ;; Initialize use-package on non-Linux platforms
+  (unless (or (package-installed-p 'use-package)
+              dw/is-guix-system)
+     (package-install 'use-package))
+  (require 'use-package)
+
+  ;; Uncomment this to get a reading on packages that get loaded at startup
+  ;;(setq use-package-verbose t)
+
+  ;; On non-Guix systems, "ensure" packages by default
+  (setq use-package-always-ensure (not dw/is-guix-system))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-use-package"
+
+#+end_src
+
+** straight.el
+
+Trying out =straight.el= for package management.  So far so good!
+
+Sometimes it's good to clean up unused repositories if I've removed packages from my configuration.  Use =straight-remove-unused-repos= for this purpose.
+
+#+begin_src emacs-lisp
+
+  ;; Bootstrap straight.el
+  (defvar bootstrap-version)
+  (let ((bootstrap-file
+        (expand-file-name "straight/repos/straight.el/bootstrap.el" user-emacs-directory))
+        (bootstrap-version 5))
+    (unless (file-exists-p bootstrap-file)
+      (with-current-buffer
+          (url-retrieve-synchronously
+          "https://raw.githubusercontent.com/raxod502/straight.el/develop/install.el"
+          'silent 'inhibit-cookies)
+        (goto-char (point-max))
+        (eval-print-last-sexp)))
+    (load bootstrap-file nil 'nomessage))
+
+  ;; Always use straight to install on systems other than Linux
+  (setq straight-use-package-by-default (not (eq system-type 'gnu/linux)))
+
+  ;; Use straight.el for use-package expressions
+  (straight-use-package 'use-package)
+
+  ;; Clean up unused repos with `straight-remove-unused-repos'
+
+#+end_src
+
+* Keep .emacs.d Clean
+
+I don't want a bunch of transient files showing up as untracked in the Git repo so I move them all to another location.
+
+#+begin_src emacs-lisp
+
+  ;; Change the user-emacs-directory to keep unwanted things out of ~/.emacs.d
+  (setq user-emacs-directory (expand-file-name "~/.cache/emacs/")
+        url-history-file (expand-file-name "url/history" user-emacs-directory))
+
+  ;; Use no-littering to automatically set common paths to the new user-emacs-directory
+  (use-package no-littering)
+
+  ;; Keep customization settings in a temporary file (thanks Ambrevar!)
+  (setq custom-file
+        (if (boundp 'server-socket-dir)
+            (expand-file-name "custom.el" server-socket-dir)
+          (expand-file-name (format "emacs-custom-%s.el" (user-uid)) temporary-file-directory)))
+  (load custom-file t)
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-no-littering"
+
+#+end_src
+
+* Update Load Path
+
+I've got a folder of custom Emacs Lisp libraries which must be added to the load path.
+
+#+begin_src emacs-lisp
+
+  ;; Add my library path to load-path
+  (push "~/.dotfiles/.emacs.d/lisp" load-path)
+
+#+end_src
+
+* Default Coding System
+
+Avoid constant errors on Windows about the coding system by setting the default to UTF-8.
+
+#+begin_src emacs-lisp
+
+  (set-default-coding-systems 'utf-8)
+
+#+end_src
+
+* Server Mode
+
+Start the Emacs server from this instance so that all =emacsclient= calls are routed here.
+
+#+begin_src emacs-lisp
+
+  (server-start)
+
+#+end_src
+
+* Desktop Environment
+
+Load up the desktop environment if on a machine that supports it and the =--use-exwm= argument was passed to Emacs on startup.  Desktop environment and window management code can be found in Desktop.org.
+
+#+begin_src emacs-lisp
+
+  (setq dw/exwm-enabled (and (not dw/is-termux)
+                             (eq window-system 'x)
+                             (seq-contains command-line-args "--use-exwm")))
+
+  (when dw/exwm-enabled
+    (require 'dw-desktop))
+
+#+end_src
+
+*Guix Packages*
+
+Despite the code being in Desktop.org, include the emacs packages for the desktop environment in this file so that they can be included in the Emacs profile.
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-exwm"
+  "emacs-desktop-environment"
+  "emacs-stumpwm-mode"
+
+#+end_src
+
+* Keyboard Bindings
+
+** ESC Cancels All
+
+#+begin_src emacs-lisp
+
+  (global-set-key (kbd "<escape>") 'keyboard-escape-quit)
+
+#+end_src
+
+** Rebind C-u
+
+Since I let =evil-mode= take over =C-u= for buffer scrolling, I need to re-bind the =universal-argument= command to another key sequence.  I'm choosing =C-M-u= for this purpose.
+
+#+begin_src emacs-lisp
+
+  (global-set-key (kbd "C-M-u") 'universal-argument)
+
+#+end_src
+
+** Let's Be Evil
+
+Some tips can be found here:
+
+- https://github.com/noctuid/evil-guide
+- https://nathantypanski.com/blog/2014-08-03-a-vim-like-emacs-config.html
+
+#+begin_src emacs-lisp
+
+    (defun dw/evil-hook ()
+      (dolist (mode '(custom-mode
+                      eshell-mode
+                      git-rebase-mode
+                      erc-mode
+                      circe-server-mode
+                      circe-chat-mode
+                      circe-query-mode
+                      sauron-mode
+                      term-mode))
+      (add-to-list 'evil-emacs-state-modes mode)))
+
+    (defun dw/dont-arrow-me-bro ()
+      (interactive)
+      (message "Arrow keys are bad, you know?"))
+
+    (use-package undo-tree
+      :init
+      (global-undo-tree-mode 1))
+
+    (use-package evil
+      :init
+      (setq evil-want-integration t)
+      (setq evil-want-keybinding nil)
+      (setq evil-want-C-u-scroll t)
+      (setq evil-want-C-i-jump nil)
+      (setq evil-respect-visual-line-mode t)
+      (setq evil-undo-system 'undo-tree)
+      :config
+      (add-hook 'evil-mode-hook 'dw/evil-hook)
+      (evil-mode 1)
+      (define-key evil-insert-state-map (kbd "C-g") 'evil-normal-state)
+      (define-key evil-insert-state-map (kbd "C-h") 'evil-delete-backward-char-and-join)
+
+      ;; Use visual line motions even outside of visual-line-mode buffers
+      (evil-global-set-key 'motion "j" 'evil-next-visual-line)
+      (evil-global-set-key 'motion "k" 'evil-previous-visual-line)
+
+      (unless dw/is-termux
+        ;; Disable arrow keys in normal and visual modes
+        (define-key evil-normal-state-map (kbd "<left>") 'dw/dont-arrow-me-bro)
+        (define-key evil-normal-state-map (kbd "<right>") 'dw/dont-arrow-me-bro)
+        (define-key evil-normal-state-map (kbd "<down>") 'dw/dont-arrow-me-bro)
+        (define-key evil-normal-state-map (kbd "<up>") 'dw/dont-arrow-me-bro)
+        (evil-global-set-key 'motion (kbd "<left>") 'dw/dont-arrow-me-bro)
+        (evil-global-set-key 'motion (kbd "<right>") 'dw/dont-arrow-me-bro)
+        (evil-global-set-key 'motion (kbd "<down>") 'dw/dont-arrow-me-bro)
+        (evil-global-set-key 'motion (kbd "<up>") 'dw/dont-arrow-me-bro))
+
+      (evil-set-initial-state 'messages-buffer-mode 'normal)
+      (evil-set-initial-state 'dashboard-mode 'normal))
+
+    (use-package evil-collection
+      :after evil
+      :init
+      (setq evil-collection-company-use-tng nil)  ;; Is this a bug in evil-collection?
+      :custom
+      (evil-collection-outline-bind-tab-p nil)
+      :config
+      (delete 'lispy evil-collection-mode-list)
+      (delete 'org-present evil-collection-mode-list)
+      (evil-collection-init))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-evil"
+  "emacs-evil-collection"
+  "emacs-undo-tree"
+
+#+end_src
+
+** Keybinding Panel (which-key)
+
+[[https://github.com/justbur/emacs-which-key][which-key]] is great for getting an overview of what keybindings are available
+based on the prefix keys you entered.  Learned about this one from Spacemacs.
+
+#+begin_src emacs-lisp
+
+  (use-package which-key
+    :init (which-key-mode)
+    :diminish which-key-mode
+    :config
+    (setq which-key-idle-delay 0.3))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-which-key"
+
+#+end_src
+
+** Simplify Leader Bindings (general.el)
+
+[[https://github.com/noctuid/general.el][general.el]] is a fantastic library for defining prefixed keybindings, especially
+in conjunction with Evil modes.
+
+#+begin_src emacs-lisp
+
+  (use-package general
+    :config
+    (general-evil-setup t)
+
+    (general-create-definer dw/leader-key-def
+      :keymaps '(normal insert visual emacs)
+      :prefix "SPC"
+      :global-prefix "C-SPC")
+
+    (general-create-definer dw/ctrl-c-keys
+      :prefix "C-c"))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-general"
+
+#+end_src
+
+* General Configuration
+
+** User Interface
+
+Clean up Emacs' user interface, make it more minimal.
+
+#+begin_src emacs-lisp
+
+  ;; Thanks, but no thanks
+  (setq inhibit-startup-message t)
+
+  (unless dw/is-termux
+    (scroll-bar-mode -1)        ; Disable visible scrollbar
+    (tool-bar-mode -1)          ; Disable the toolbar
+    (tooltip-mode -1)           ; Disable tooltips
+    (set-fringe-mode 10))       ; Give some breathing room
+
+  (menu-bar-mode -1)            ; Disable the menu bar
+
+  ;; Set up the visible bell
+  (setq visible-bell t)
+
+#+end_src
+
+Improve scrolling.
+
+#+begin_src emacs-lisp
+
+  (unless dw/is-termux
+    (setq mouse-wheel-scroll-amount '(1 ((shift) . 1))) ;; one line at a time
+    (setq mouse-wheel-progressive-speed nil) ;; don't accelerate scrolling
+    (setq mouse-wheel-follow-mouse 't) ;; scroll window under mouse
+    (setq scroll-step 1) ;; keyboard scroll one line at a time
+    (setq use-dialog-box nil)) ;; Disable dialog boxes since they weren't working in Mac OSX
+
+#+end_src
+
+Set frame transparency and maximize windows by default.
+
+#+begin_src emacs-lisp
+
+  (unless dw/is-termux
+    (set-frame-parameter (selected-frame) 'alpha '(90 . 90))
+    (add-to-list 'default-frame-alist '(alpha . (90 . 90)))
+    (set-frame-parameter (selected-frame) 'fullscreen 'maximized)
+    (add-to-list 'default-frame-alist '(fullscreen . maximized)))
+
+#+end_src
+
+Enable line numbers and customize their format.
+
+#+begin_src emacs-lisp
+
+  (column-number-mode)
+
+  ;; Enable line numbers for some modes
+  (dolist (mode '(text-mode-hook
+                  prog-mode-hook
+                  conf-mode-hook))
+    (add-hook mode (lambda () (display-line-numbers-mode 1))))
+
+  ;; Override some modes which derive from the above
+  (dolist (mode '(org-mode-hook))
+    (add-hook mode (lambda () (display-line-numbers-mode 0))))
+
+#+end_src
+
+Don't warn for large files (shows up when launching videos)
+
+#+begin_src emacs-lisp
+
+  (setq large-file-warning-threshold nil)
+
+#+end_src
+
+Don't warn for following symlinked files
+
+#+begin_src emacs-lisp
+
+  (setq vc-follow-symlinks t)
+
+#+end_src
+
+Don't warn when advice is added for functions
+
+#+begin_src emacs-lisp
+
+  (setq ad-redefinition-action 'accept)
+
+#+end_src
+
+** Theme
+
+These days I bounce around between themes included with [[https://github.com/hlissner/emacs-doom-themes][DOOM Themes]] since they're well-designed and integrate with a lot of Emacs packages.
+
+A nice gallery of Emacs themes can be found at https://emacsthemes.com/.
+
+Alternate themes:
+
+- =doom-snazzy=
+- =doom-vibrant=
+
+#+begin_src emacs-lisp
+
+  (use-package spacegray-theme :defer t)
+  (use-package doom-themes :defer t)
+  (unless dw/is-termux
+    (load-theme 'doom-palenight t)
+    (doom-themes-visual-bell-config))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-doom-themes"
+  "emacs-spacegray-theme"
+
+#+end_src
+
+** Font
+
+*** Set the font
+
+Different platforms need different default font sizes, and [[https://mozilla.github.io/Fira/][Fira Mono]] is currently my favorite face.
+
+#+begin_src emacs-lisp
+
+  ;; Set the font face based on platform
+  (pcase system-type
+    ((or 'gnu/linux 'windows-nt 'cygwin)
+     (set-face-attribute 'default nil
+                         :font "JetBrains Mono"
+                         :weight 'light
+                         :height (dw/system-settings-get 'emacs/default-face-size)))
+    ('darwin (set-face-attribute 'default nil :font "Fira Mono" :height 170)))
+
+  ;; Set the fixed pitch face
+  (set-face-attribute 'fixed-pitch nil
+                      :font "JetBrains Mono"
+                      :weight 'light
+                      :height (dw/system-settings-get 'emacs/fixed-face-size))
+
+  ;; Set the variable pitch face
+  (set-face-attribute 'variable-pitch nil
+                      ;; :font "Cantarell"
+                      :font "Iosevka Aile"
+                      :height (dw/system-settings-get 'emacs/variable-face-size)
+                      :weight 'light)
+
+#+end_src
+
+*** Enable proper Unicode glyph support
+
+#+begin_src emacs-lisp
+
+  (defun dw/replace-unicode-font-mapping (block-name old-font new-font)
+    (let* ((block-idx (cl-position-if
+                           (lambda (i) (string-equal (car i) block-name))
+                           unicode-fonts-block-font-mapping))
+           (block-fonts (cadr (nth block-idx unicode-fonts-block-font-mapping)))
+           (updated-block (cl-substitute new-font old-font block-fonts :test 'string-equal)))
+      (setf (cdr (nth block-idx unicode-fonts-block-font-mapping))
+            `(,updated-block))))
+
+  (use-package unicode-fonts
+    :disabled
+    :if (not dw/is-termux)
+    :custom
+    (unicode-fonts-skip-font-groups '(low-quality-glyphs))
+    :config
+    ;; Fix the font mappings to use the right emoji font
+    (mapcar
+      (lambda (block-name)
+        (dw/replace-unicode-font-mapping block-name "Apple Color Emoji" "Noto Color Emoji"))
+      '("Dingbats"
+        "Emoticons"
+        "Miscellaneous Symbols and Pictographs"
+        "Transport and Map Symbols"))
+    (unicode-fonts-setup))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  ;; "emacs-unicode-fonts"
+
+#+end_src
+
+*** Emojis in buffers
+
+#+begin_src emacs-lisp
+
+  (use-package emojify
+    :hook (erc-mode . emojify-mode)
+    :commands emojify-mode)
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-emojify"
+
+#+end_src
+
+** Mode Line
+
+*** Basic Customization
+
+#+begin_src emacs-lisp
+
+  (setq display-time-format "%l:%M %p %b %y"
+        display-time-default-load-average nil)
+
+#+end_src
+
+*** Enable Mode Diminishing
+
+The [[https://github.com/myrjola/diminish.el][diminish]] package hides pesky minor modes from the modelines.
+
+#+begin_src emacs-lisp
+
+  (use-package diminish)
+
+#+end_src
+
+*** Smart Mode Line
+
+Prettify the modeline with [[https://github.com/Malabarba/smart-mode-line/][smart-mode-line]].  Really need to re-evaluate the
+ordering of =mode-line-format=.  Also not sure if =rm-excluded-modes= is needed
+anymore if I set up =diminish= correctly.
+
+#+begin_src emacs-lisp
+
+  (use-package smart-mode-line
+    :disabled
+    :if dw/is-termux
+    :config
+    (setq sml/no-confirm-load-theme t)
+    (sml/setup)
+    (sml/apply-theme 'respectful)  ; Respect the theme colors
+    (setq sml/mode-width 'right
+        sml/name-width 60)
+
+    (setq-default mode-line-format
+    `("%e"
+        ,(when dw/exwm-enabled
+            '(:eval (format "[%d] " exwm-workspace-current-index)))
+        mode-line-front-space
+        evil-mode-line-tag
+        mode-line-mule-info
+        mode-line-client
+        mode-line-modified
+        mode-line-remote
+        mode-line-frame-identification
+        mode-line-buffer-identification
+        sml/pos-id-separator
+        (vc-mode vc-mode)
+        " "
+        ;mode-line-position
+        sml/pre-modes-separator
+        mode-line-modes
+        " "
+        mode-line-misc-info))
+
+    (setq rm-excluded-modes
+      (mapconcat
+        'identity
+        ; These names must start with a space!
+        '(" GitGutter" " MRev" " company"
+        " Helm" " Undo-Tree" " Projectile.*" " Z" " Ind"
+        " Org-Agenda.*" " ElDoc" " SP/s" " cider.*")
+        "\\|")))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-smart-mode-line"
+
+#+end_src
+
+*** Doom Modeline
+
+#+begin_src emacs-lisp
+
+  ;; You must run (all-the-icons-install-fonts) one time after
+  ;; installing this package!
+
+  (use-package minions
+    :hook (doom-modeline-mode . minions-mode))
+
+  (use-package doom-modeline
+    :after eshell     ;; Make sure it gets hooked after eshell
+    :hook (after-init . doom-modeline-init)
+    :custom-face
+    (mode-line ((t (:height 0.85))))
+    (mode-line-inactive ((t (:height 0.85))))
+    :custom
+    (doom-modeline-height 15)
+    (doom-modeline-bar-width 6)
+    (doom-modeline-lsp t)
+    (doom-modeline-github nil)
+    (doom-modeline-mu4e nil)
+    (doom-modeline-irc t)
+    (doom-modeline-minor-modes t)
+    (doom-modeline-persp-name nil)
+    (doom-modeline-buffer-file-name-style 'truncate-except-project)
+    (doom-modeline-major-mode-icon nil))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-doom-modeline"
+  "emacs-all-the-icons"
+  "emacs-minions"
+
+#+end_src
+
+** Workspaces
+
+#+begin_src emacs-lisp
+
+  (use-package perspective
+    :demand t
+    :bind (("C-M-k" . persp-switch)
+           ("C-M-n" . persp-next)
+           ("C-x k" . persp-kill-buffer*))
+    :custom
+    (persp-initial-frame-name "Main")
+    :config
+    ;; Running `persp-mode' multiple times resets the perspective list...
+    (unless (equal persp-mode t)
+      (persp-mode)))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-perspective"
+
+#+end_src
+
+** Notifications
+
+[[https://github.com/jwiegley/alert][alert]] is a great library for showing notifications from other packages in a variety of ways.  For now I just use it to surface desktop notifications from package code.
+
+#+begin_src emacs-lisp
+
+  (use-package alert
+    :commands alert
+    :config
+    (setq alert-default-style 'notifications))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-alert"
+
+#+end_src
+
+** Auto-Saving Changed Files
+
+#+begin_src emacs-lisp
+
+  (use-package super-save
+    :defer 1
+    :diminish super-save-mode
+    :config
+    (super-save-mode +1)
+    (setq super-save-auto-save-when-idle t))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-super-save"
+
+#+end_src
+
+** Auto-Reverting Changed Files
+
+#+begin_src emacs-lisp
+
+  ;; Revert Dired and other buffers
+  (setq global-auto-revert-non-file-buffers t)
+
+  ;; Revert buffers when the underlying file has changed
+  (global-auto-revert-mode 1)
+
+#+end_src
+
+** UI Toggles
+
+#+begin_src emacs-lisp
+
+  (dw/leader-key-def
+    "t"  '(:ignore t :which-key "toggles")
+    "tw" 'whitespace-mode
+    "tt" '(counsel-load-theme :which-key "choose theme"))
+
+#+end_src
+
+** Highlight Matching Braces
+
+#+begin_src emacs-lisp
+
+  (use-package paren
+    :config
+    (set-face-attribute 'show-paren-match-expression nil :background "#363e4a")
+    (show-paren-mode 1))
+
+#+end_src
+
+** Displaying World Time
+
+=display-time-world= command provides a nice display of the time at a specified
+list of timezones.  Nice for working in a team with remote members.
+
+#+begin_src emacs-lisp
+
+  (setq display-time-world-list
+    '(("Etc/UTC" "UTC")
+      ("America/Los_Angeles" "Seattle")
+      ("America/New_York" "New York")
+      ("Europe/Athens" "Athens")
+      ("Pacific/Auckland" "Auckland")
+      ("Asia/Shanghai" "Shanghai")
+      ("Asia/Kolkata" "Hyderabad")))
+  (setq display-time-world-time-format "%a, %d %b %I:%M %p %Z")
+
+#+end_src
+
+** Pinentry
+
+Emacs can be prompted for the PIN of GPG private keys, we just need to set
+=epa-pinentry-mode= to accomplish that:
+
+#+begin_src emacs-lisp
+
+  (unless (or dw/is-termux
+              (eq system-type 'windows-nt))
+    (setq epa-pinentry-mode 'loopback)
+    (pinentry-start))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-pinentry"
+  "pinentry-emacs"
+
+#+end_src
+
+** TRAMP
+
+#+begin_src emacs-lisp
+
+  ;; Set default connection mode to SSH
+  (setq tramp-default-method "ssh")
+
+#+end_src
+
+** Emacs as External Editor
+
+#+begin_src emacs-lisp
+
+(defun dw/show-server-edit-buffer (buffer)
+  ;; TODO: Set a transient keymap to close with 'C-c C-c'
+  (split-window-vertically -15)
+  (other-window 1)
+  (set-buffer buffer))
+
+;; (setq server-window #'dw/show-server-edit-buffer)
+
+#+end_src
+
+* Editing Configuration
+
+** Tab Widths
+
+Default to an indentation size of 2 spaces since it's the norm for pretty much every language I use.
+
+#+begin_src emacs-lisp
+
+  (setq-default tab-width 2)
+  (setq-default evil-shift-width tab-width)
+
+#+end_src
+
+** Use spaces instead of tabs for indentation
+
+#+begin_src emacs-lisp
+
+  (setq-default indent-tabs-mode nil)
+
+#+end_src
+
+** Commenting Lines
+
+#+begin_src emacs-lisp
+
+  (use-package evil-nerd-commenter
+    :bind ("M-/" . evilnc-comment-or-uncomment-lines))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-evil-nerd-commenter"
+
+#+end_src
+
+** Automatically clean whitespace
+
+#+begin_src emacs-lisp
+
+  (use-package ws-butler
+    :hook ((text-mode . ws-butler-mode)
+           (prog-mode . ws-butler-mode)))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-ws-butler"
+
+#+end_src
+
+** Use Parinfer for Lispy languages
+
+#+begin_src emacs-lisp
+
+  (use-package parinfer
+    :disabled
+    :hook ((clojure-mode . parinfer-mode)
+           (emacs-lisp-mode . parinfer-mode)
+           (common-lisp-mode . parinfer-mode)
+           (scheme-mode . parinfer-mode)
+           (lisp-mode . parinfer-mode))
+    :config
+    (setq parinfer-extensions
+        '(defaults       ; should be included.
+          pretty-parens  ; different paren styles for different modes.
+          evil           ; If you use Evil.
+          smart-tab      ; C-b & C-f jump positions and smart shift with tab & S-tab.
+          smart-yank)))  ; Yank behavior depend on mode.
+
+  (dw/leader-key-def
+    "tp" 'parinfer-toggle-mode)
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-parinfer-mode"
+
+#+end_src
+
+** Origami.el for Folding
+
+#+begin_src emacs-lisp
+
+(use-package origami
+  :hook (yaml-mode . origami-mode))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+"emacs-origami-el"
+
+#+end_src
+
+* Configuration Files
+** Configuration file management with dotcrafter.el
+
+I've been working on a package called [[https://github.com/daviwil/dotcrafter.el][dotcrafter.el]] for complete management of your dotfiles folder with special emphasis on configurations written with Org Mode.
+
+Check out my [[https://systemcrafters.cc/learning-emacs-lisp/][Learning Emacs Lisp]] series to see this package be written from scratch!
+
+#+begin_src emacs-lisp
+
+  (use-package dotcrafter
+    :straight '(dotcrafter :host github
+                            :repo "daviwil/dotcrafter.el"
+                            :branch "main")
+    :custom
+    (dotcrafter-org-files '("Emacs.org"
+                            "Desktop.org"
+                            "Stump.org"
+                            "Systems.org"
+                            "Mail.org"
+                            "Workflow.org"))
+    :init
+    (require 'dotcrafter) ; Not sure why I have to do this...
+    :config
+    (dotcrafter-mode))
+
+#+end_src
+
+** Helpers
+
+#+begin_src emacs-lisp
+
+  (defun dw/org-file-jump-to-heading (org-file heading-title)
+    (interactive)
+    (find-file (expand-file-name org-file))
+    (goto-char (point-min))
+    (search-forward (concat "* " heading-title))
+    (org-overview)
+    (org-reveal)
+    (org-show-subtree)
+    (forward-line))
+
+  (defun dw/org-file-show-headings (org-file)
+    (interactive)
+    (find-file (expand-file-name org-file))
+    (counsel-org-goto)
+    (org-overview)
+    (org-reveal)
+    (org-show-subtree)
+    (forward-line))
+
+#+end_src
+
+** Bindings
+
+#+begin_src emacs-lisp
+
+  (dw/leader-key-def
+    "fn" '((lambda () (interactive) (counsel-find-file "~/Notes/")) :which-key "notes")
+    "fd"  '(:ignore t :which-key "dotfiles")
+    "fdd" '((lambda () (interactive) (find-file "~/.dotfiles/Desktop.org")) :which-key "desktop")
+    "fde" '((lambda () (interactive) (find-file (expand-file-name "~/.dotfiles/Emacs.org"))) :which-key "edit config")
+    "fdE" '((lambda () (interactive) (dw/org-file-show-headings "~/.dotfiles/Emacs.org")) :which-key "edit config")
+    "fdm" '((lambda () (interactive) (find-file "~/.dotfiles/Mail.org")) :which-key "mail")
+    "fdM" '((lambda () (interactive) (counsel-find-file "~/.dotfiles/.config/guix/manifests/")) :which-key "manifests")
+    "fds" '((lambda () (interactive) (dw/org-file-jump-to-heading "~/.dotfiles/Systems.org" "Base Configuration")) :which-key "base system")
+    "fdS" '((lambda () (interactive) (dw/org-file-jump-to-heading "~/.dotfiles/Systems.org" system-name)) :which-key "this system")
+    "fdp" '((lambda () (interactive) (dw/org-file-jump-to-heading "~/.dotfiles/Desktop.org" "Panel via Polybar")) :which-key "polybar")
+    "fdw" '((lambda () (interactive) (find-file (expand-file-name "~/.dotfiles/Workflow.org"))) :which-key "workflow")
+    "fdv" '((lambda () (interactive) (find-file "~/.dotfiles/.config/vimb/config")) :which-key "vimb"))
+
+#+end_src
+
+* Stateful Keymaps with Hydra
+
+#+begin_src emacs-lisp
+
+  (use-package hydra
+    :defer 1)
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-hydra"
+
+#+end_src
+
+* Completion System
+
+Trying this as an alternative to Ivy and Counsel.
+
+** Preserve Minibuffer History with savehist-mode
+
+#+begin_src emacs-lisp
+
+  (use-package savehist
+    :config
+    (setq history-length 25)
+    (savehist-mode 1))
+
+    ;; Individual history elements can be configured separately
+    ;;(put 'minibuffer-history 'history-length 25)
+    ;;(put 'evil-ex-history 'history-length 50)
+    ;;(put 'kill-ring 'history-length 25))
+
+#+end_src
+
+** Completions with Vertico
+
+#+begin_src emacs-lisp
+
+  (defun dw/minibuffer-backward-kill (arg)
+    "When minibuffer is completing a file name delete up to parent
+  folder, otherwise delete a word"
+    (interactive "p")
+    (if minibuffer-completing-file-name
+        ;; Borrowed from https://github.com/raxod502/selectrum/issues/498#issuecomment-803283608
+        (if (string-match-p "/." (minibuffer-contents))
+            (zap-up-to-char (- arg) ?/)
+          (delete-minibuffer-contents))
+        (delete-word (- arg))))
+
+  (use-package vertico
+    ;; :straight '(vertico :host github
+    ;;                     :repo "minad/vertico"
+    ;;                     :branch "main")
+    :bind (:map vertico-map
+           ("C-j" . vertico-next)
+           ("C-k" . vertico-previous)
+           ("C-f" . vertico-exit)
+           :map minibuffer-local-map
+           ("M-h" . dw/minibuffer-backward-kill))
+    :custom
+    (vertico-cycle t)
+    :custom-face
+    (vertico-current ((t (:background "#3a3f5a"))))
+    :init
+    (vertico-mode))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-vertico"
+
+#+end_src
+
+** Completions in Regions with Corfu
+
+#+begin_src emacs-lisp
+
+  (use-package corfu
+    :straight '(corfu :host github
+                      :repo "minad/corfu")
+    :bind (:map corfu-map
+           ("C-j" . corfu-next)
+           ("C-k" . corfu-previous)
+           ("C-f" . corfu-insert))
+    :custom
+    (corfu-cycle t)
+    :config
+    (corfu-global-mode))
+
+#+end_src
+
+** Improved Candidate Filtering with Orderless
+
+#+begin_src emacs-lisp
+
+  (use-package orderless
+    :init
+    (setq completion-styles '(orderless)
+          completion-category-defaults nil
+          completion-category-overrides '((file (styles . (partial-completion))))))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-orderless"
+
+#+end_src
+
+** Consult Commands
+
+Consult provides a lot of useful completion commands similar to Ivy's Counsel.
+
+#+begin_src emacs-lisp
+
+  (defun dw/get-project-root ()
+    (when (fboundp 'projectile-project-root)
+      (projectile-project-root)))
+
+  (use-package consult
+    :demand t
+    :bind (("C-s" . consult-line)
+           ("C-M-l" . consult-imenu)
+           ("C-M-j" . persp-switch-to-buffer*)
+           :map minibuffer-local-map
+           ("C-r" . consult-history))
+    :custom
+    (consult-project-root-function #'dw/get-project-root)
+    (completion-in-region-function #'consult-completion-in-region))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-consult"
+
+#+end_src
+
+** Switching Directories with consult-dir
+
+#+begin_src emacs-lisp
+
+  (use-package consult-dir
+    :straight t
+    :bind (("C-x C-d" . consult-dir)
+           :map vertico-map
+           ("C-x C-d" . consult-dir)
+           ("C-x C-j" . consult-dir-jump-file))
+    :custom
+    (consult-dir-project-list-function nil))
+
+  ;; Thanks Karthik!
+  (with-eval-after-load 'eshell-mode
+    (defun eshell/z (&optional regexp)
+      "Navigate to a previously visited directory in eshell."
+      (let ((eshell-dirs (delete-dups (mapcar 'abbreviate-file-name
+                                              (ring-elements eshell-last-dir-ring)))))
+        (cond
+         ((and (not regexp) (featurep 'consult-dir))
+          (let* ((consult-dir--source-eshell `(:name "Eshell"
+                                                     :narrow ?e
+                                                     :category file
+                                                     :face consult-file
+                                                     :items ,eshell-dirs))
+                 (consult-dir-sources (cons consult-dir--source-eshell consult-dir-sources)))
+            (eshell/cd (substring-no-properties (consult-dir--pick "Switch directory: ")))))
+         (t (eshell/cd (if regexp (eshell-find-previous-directory regexp)
+                         (completing-read "cd: " eshell-dirs))))))))
+
+#+end_src
+
+** Completion Annotations with Marginalia
+
+Marginalia provides helpful annotations for various types of minibuffer completions.  You can think of it as a replacement of =ivy-rich=.
+
+#+begin_src emacs-lisp
+
+  (use-package marginalia
+    :after vertico
+    :custom
+    (marginalia-annotators '(marginalia-annotators-heavy marginalia-annotators-light nil))
+    :init
+    (marginalia-mode))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-marginalia"
+
+#+end_src
+
+** Completion Actions with Embark
+
+#+begin_src emacs-lisp
+
+  (use-package embark
+    :bind (("C-S-a" . embark-act)
+           :map minibuffer-local-map
+           ("C-d" . embark-act))
+    :config
+
+    ;; Show Embark actions via which-key
+    (setq embark-action-indicator
+          (lambda (map)
+            (which-key--show-keymap "Embark" map nil nil 'no-paging)
+            #'which-key--hide-popup-ignore-command)
+          embark-become-indicator embark-action-indicator))
+
+  ;; (use-package embark-consult
+  ;;   :straight '(embark-consult :host github
+  ;;                              :repo "oantolin/embark"
+  ;;                              :files ("embark-consult.el"))
+  ;;   :after (embark consult)
+  ;;   :demand t
+  ;;   :hook
+  ;;   (embark-collect-mode . embark-consult-preview-minor-mode))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-embark"
+
+#+end_src
+
+** Launching apps
+
+#+begin_src emacs-lisp
+
+  (use-package app-launcher)
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-app-launcher"
+
+#+end_src
+
+* Jumping with Avy
+
+#+begin_src emacs-lisp
+
+  (use-package avy
+    :commands (avy-goto-char avy-goto-word-0 avy-goto-line))
+
+  (dw/leader-key-def
+    "j"   '(:ignore t :which-key "jump")
+    "jj"  '(avy-goto-char :which-key "jump to char")
+    "jw"  '(avy-goto-word-0 :which-key "jump to word")
+    "jl"  '(avy-goto-line :which-key "jump to line"))
+
+#+end_src
+
+*Guix Packages*
+
+#+begin_src scheme :noweb-ref packages :noweb-sep ""
+
+  "emacs-avy"
+
+#+end_src

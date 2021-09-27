@@ -1,0 +1,5 @@
+#+title: Org Website Example
+
+This repo is an example of how you can build and publish a website with [[https://orgmode.org][Org Mode]].
+
+Check out the [[https://systemcrafters.net/publishing-websites-with-org-mode/][Publishing Websites with Org Mode]] series to learn how this was created!
